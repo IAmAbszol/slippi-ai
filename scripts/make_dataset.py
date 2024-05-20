@@ -1,3 +1,5 @@
+import enum
+import numpy as np
 import os
 import shutil
 import pickle
@@ -8,18 +10,57 @@ from absl import app
 from absl import flags
 
 import melee
-import embed
-import stats
-import paths
-import utils
+from slippi_ai import (embed, utils)
+
+class GameStateWrapper:
+  def __init__(self, game_state):
+    self.game_state = game_state
+
+  def add_player_attribute(self, port, value):
+    setattr(self, f'p{port}', value)
+
+  def __getattr__(self, name):
+    if name in self.__dict__:
+      return self.__dict__[name]
+    return getattr(self.game_state, name)
+
+def modify_in_place(obj, depth=0, max_depth=20):
+  if depth > max_depth:
+    print(f"Reached max recursion depth at depth {depth}.")
+    return
+
+  if isinstance(obj, (np.ndarray, np.number, np.bool_)):
+    print("Encountered a NumPy array or number; skipping.")
+    return
+
+  for key in dir(obj):
+    if key.startswith('_') or key in ['count', 'index']:
+      continue
+
+    value = getattr(obj, key)
+
+    if isinstance(value, enum.Enum):
+      setattr(obj, key, value.value)
+    elif isinstance(value, dict):
+      for dict_key, dict_value in value.items():
+        if isinstance(dict_value, enum.Enum):
+          value[dict_key] = dict_value.value
+        if isinstance(dict_key, enum.Enum):
+          dict_value = value.pop(dict_key)
+          value[dict_key.name] = dict_value
+    elif isinstance(value, (list, tuple)):
+      for i, element in enumerate(value):
+        modify_in_place(element, depth=depth + 1)
+    elif not isinstance(value, (int, float, str, bool)):
+      modify_in_place(value, depth=depth + 1)
+
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('cores', 1, 'number of cores')
 flags.DEFINE_boolean('compress', True, 'Compress with zlib.')
-flags.DEFINE_enum('subset', None, stats.SUBSETS, 'Subset of full dataset.')
 
-flags.DEFINE_string('src_dir', paths.DATASET_PATH, 'Folder with slippi replays.')
-flags.DEFINE_string('dst_dir', paths.COMPRESSED_PATH, 'Where to create the dataset.')
+flags.DEFINE_string('src_dir', 'training_data', 'Folder with slippi replays.')
+flags.DEFINE_string('dst_dir', 'training_data/compressed_data', 'Where to create the dataset.')
 
 def read_gamestates(replay_path):
   print("Reading from ", replay_path)
@@ -33,10 +74,14 @@ def read_gamestates(replay_path):
 
   def fix_state(s):
     s.player = {port_map[p]: v for p, v in s.player.items()}
+    for port, v in enumerate(s.player.values()):
+      s.add_player_attribute(port, v)
 
   while gamestate:
-    fix_state(gamestate)
-    yield gamestate
+    modify_in_place(gamestate)
+    gamestate_wrapper = GameStateWrapper(gamestate)
+    fix_state(gamestate_wrapper)
+    yield gamestate_wrapper
     gamestate = console.step()
 
 # TODO: enable speeds?
@@ -71,10 +116,10 @@ def batch_slp_to_pkl(src_dir, dst_dir, names, compress=False, cores=1):
   # to see error messages
   if cores == 1:
     for name in names:
-      try:
-        slp_to_pkl(src_dir, dst_dir, name, compress)
-      except Exception:
-        print('Bad replay file', name)
+      # try:
+      slp_to_pkl(src_dir, dst_dir, name, compress)
+      # except Exception:
+      #   print('Bad replay file', name)
     return
 
   with multiprocessing.Pool(cores) as pool:
@@ -86,11 +131,8 @@ def batch_slp_to_pkl(src_dir, dst_dir, names, compress=False, cores=1):
       r.wait()
 
 def main(_):
-  if FLAGS.subset:
-    subset = stats.get_subset(FLAGS.subset)
-  else:
-    subset = os.listdir(FLAGS.src_dir)
-    subset = set(subset) - stats.BAD_NAMES
+  subset = os.listdir(FLAGS.src_dir)
+  subset = set(subset)
 
   batch_slp_to_pkl(
       FLAGS.src_dir,

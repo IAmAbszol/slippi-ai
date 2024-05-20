@@ -3,6 +3,7 @@ Converts SSBM types to Tensorflow types.
 """
 
 import abc
+import enum
 import math
 from typing import (
     Any, Callable, Dict, Generic, Iterator, Mapping, NamedTuple, Optional, Sequence,
@@ -235,7 +236,12 @@ class StructEmbedding(Embedding[NT, NT]):
     return self.builder({k: e.unflatten(seq) for k, e in self.embedding})
 
   def from_state(self, state: NT) -> NT:
-    struct = {k: e.from_state(self.getter(state, k)) for k, e in self.embedding}
+    print('==>', self.name, state, self.embedding)
+    struct = {}
+    for k, e in self.embedding:
+      print('#>>>>', k, e, state, type(k))
+      struct[k] = e.from_state(self.getter(state, k))
+    # struct = {k: e.from_state(self.getter(state, k)) for k, e in self.embedding}
     return self.builder(struct)
 
   def input_signature(self):
@@ -374,7 +380,7 @@ def make_player_embedding(
 
     if with_controller:
       # TODO: make this configurable
-      embedding.append(('controller', embed_controller_default))
+      embedding.append(('controller_state', embed_controller_default))
 
     if with_speeds:
       embed_speed = FloatEmbedding("speed", scale=speed_scale)
@@ -426,8 +432,8 @@ LEGAL_BUTTONS = [
     enums.Button.BUTTON_D_UP,
 ]
 embed_buttons = ordered_struct_embedding(
-    'buttons',
-    [(b.value, BoolEmbedding(name=b.value)) for b in LEGAL_BUTTONS],
+    'button',
+    [(b.name, BoolEmbedding(name=b.value)) for b in LEGAL_BUTTONS],
     Buttons,
 )
 
@@ -466,10 +472,11 @@ def get_controller_embedding(
 
   return ordered_struct_embedding(
       "controller", [
-          ("buttons", embed_buttons),
+          ("button", embed_buttons),
           ("main_stick", embed_stick),
           ("c_stick", embed_stick),
-          ("shoulder", embed_shoulder),
+          ("l_shoulder", embed_shoulder),
+          ("r_shoulder", embed_shoulder),
       ], Controller)
 
 embed_controller_default = get_controller_embedding()  # continuous sticks
